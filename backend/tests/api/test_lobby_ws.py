@@ -173,3 +173,86 @@ def test_non_host_cannot_start_game(
         bob_ws.send_json({"type": "start_game", "data": {}})
         error = bob_ws.receive_json()
         assert error["type"] == "action_error"
+
+
+def test_host_can_remove_a_human_player(client: TestClient) -> None:
+    game = _create_game(client)
+    game_id = game["game_id"]
+    bob = _join(client, game_id, "Bob")
+
+    with client.websocket_connect(
+        f"/ws/games/{game_id}?token={game['host_session_token']}"
+    ) as host_ws:
+        host_ws.receive_json()
+        host_ws.send_json(
+            {
+                "type": "remove_player",
+                "data": {"player_id": bob["player_id"]},
+            }
+        )
+        host_state = host_ws.receive_json()
+
+    assert [p["name"] for p in host_state["data"]["players"]] == ["Alice"]
+
+
+def test_host_can_remove_a_bot(client: TestClient) -> None:
+    game = _create_game(client)
+    game_id = game["game_id"]
+
+    with client.websocket_connect(
+        f"/ws/games/{game_id}?token={game['host_session_token']}"
+    ) as host_ws:
+        host_ws.receive_json()
+        host_ws.send_json({"type": "add_bot", "data": {"seat": 1}})
+        with_bot = host_ws.receive_json()
+        bot = next(p for p in with_bot["data"]["players"] if p["is_bot"])
+
+        host_ws.send_json({"type": "remove_player", "data": {"player_id": bot["id"]}})
+        without_bot = host_ws.receive_json()
+
+    assert all(not p["is_bot"] for p in without_bot["data"]["players"])
+
+
+def test_non_host_cannot_remove_players(client: TestClient) -> None:
+    game = _create_game(client)
+    game_id = game["game_id"]
+    bob = _join(client, game_id, "Bob")
+
+    with client.websocket_connect(
+        f"/ws/games/{game_id}?token={bob['session_token']}"
+    ) as bob_ws:
+        bob_ws.receive_json()
+        bob_ws.send_json(
+            {
+                "type": "remove_player",
+                "data": {"player_id": game["player_id"]},
+            }
+        )
+        error = bob_ws.receive_json()
+
+    assert error == {
+        "type": "action_error",
+        "data": {"reason": "only the host can remove players"},
+    }
+
+
+def test_host_cannot_remove_themselves(client: TestClient) -> None:
+    game = _create_game(client)
+    game_id = game["game_id"]
+
+    with client.websocket_connect(
+        f"/ws/games/{game_id}?token={game['host_session_token']}"
+    ) as host_ws:
+        host_ws.receive_json()
+        host_ws.send_json(
+            {
+                "type": "remove_player",
+                "data": {"player_id": game["player_id"]},
+            }
+        )
+        error = host_ws.receive_json()
+
+    assert error == {
+        "type": "action_error",
+        "data": {"reason": "the host cannot be removed"},
+    }

@@ -54,6 +54,7 @@ describe('useGameStore', () => {
     expect(result?.scoresBreakdown.A).toEqual(breakdown)
     expect(result?.teamScoresAfter).toEqual({ A: 520, B: 0 })
     expect(result?.nextDeal).toBe(true)
+    expect(result?.transitionEndsAt).toBeNull()
   })
 
   it('dismisses a deal result', () => {

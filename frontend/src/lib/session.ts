@@ -23,3 +23,7 @@ export function loadSession(gameId: string): StoredSession | null {
     return null
   }
 }
+
+export function removeSession(gameId: string): void {
+  localStorage.removeItem(key(gameId))
+}

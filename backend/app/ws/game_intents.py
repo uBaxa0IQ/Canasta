@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import time
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Deal as DealRow
-from app.db.models import Game, Player
+from app.db.models import Game
 from app.engine.actions import (
     Action,
     AddToMeld,
@@ -30,8 +30,8 @@ from app.engine.engine import (
     GameState,
     apply_action,
     final_deal_scores,
-    start_new_deal,
 )
+from app.engine.models import Card
 from app.engine.errors import IllegalActionError
 from app.redis_store import RedisGameStore
 
@@ -47,6 +47,8 @@ GAME_INTENTS = frozenset(
     }
 )
 
+BETWEEN_DEALS_SECONDS = 10.0
+
 
 @dataclass
 class GameIntentResult:
@@ -57,6 +59,81 @@ class GameIntentResult:
     # player-facing explanation for an action that changed state in an
     # unexpected-but-legal way (e.g. below-threshold melds rolled back)
     notice: str | None = None
+    action_event: dict | None = None
+
+
+def _event_card(card: Card) -> dict:
+    return {
+        "id": card.id,
+        "rank": card.rank.value,
+        "suit": card.suit.value if card.suit else None,
+    }
+
+
+def _meld_cards_by_id(deal) -> dict[str, list[Card]]:
+    return {
+        meld.id: [card for card in meld.slots if card is not None]
+        for team in deal.teams.values()
+        for meld in team.melds
+    }
+
+
+def _build_action_event(
+    *,
+    intent: str,
+    data: dict,
+    sender_id: str,
+    before_hand: list[Card],
+    before_discard: list[Card],
+    before_melds: dict[str, list[Card]],
+    before_opened: dict[str, bool],
+    before_accumulator: dict[str, int],
+    before_penalties: dict[str, int],
+    deal,
+    notice: str | None,
+) -> dict:
+    team_id = deal.player_team[sender_id]
+    after_hand = deal.hands[sender_id]
+    after_hand_ids = {card.id for card in after_hand}
+    before_hand_ids = {card.id for card in before_hand}
+    after_melds = _meld_cards_by_id(deal)
+    added_to_hand = [card for card in after_hand if card.id not in before_hand_ids]
+    removed_from_hand = [card for card in before_hand if card.id not in after_hand_ids]
+    meld_id = data.get("meld_id")
+    if intent == "create_meld":
+        meld_id = next((mid for mid in after_melds if mid not in before_melds), None)
+
+    canasta_completed = False
+    if meld_id and meld_id in after_melds:
+        canasta_completed = (
+            len(before_melds.get(meld_id, [])) < 7 <= len(after_melds[meld_id])
+        )
+
+    event = {
+        "action": "rollback" if notice is not None else intent,
+        "actor_id": sender_id,
+        "team_id": team_id,
+        "phase_after": deal.turn_state.phase.value,
+        "turn_player_after": deal.turn_state.current_player_id,
+        "meld_id": meld_id,
+        "cards": [_event_card(card) for card in removed_from_hand],
+        "drawn_cards": [_event_card(card) for card in added_to_hand],
+        "draw_count": max(0, len(after_hand) - len(before_hand)),
+        "discard_count_before": len(before_discard),
+        "team_opened": not before_opened.get(team_id, False)
+        and deal.teams[team_id].is_opened,
+        "threshold_before": before_accumulator.get(team_id, 0),
+        "threshold_after": deal.teams[team_id].turn_accumulator,
+        "penalty_delta": deal.penalties.get(team_id, 0)
+        - before_penalties.get(team_id, 0),
+        "canasta_completed": canasta_completed,
+        "deal_completed": deal.deal_over,
+        "exit_type": deal.exit_type.value if deal.exit_type else None,
+    }
+    if intent == "steal_wild":
+        event["stolen_card_id"] = data.get("wild_card_id")
+        event["replacement_card_id"] = data.get("replacement_card_id")
+    return event
 
 
 def _wild_side(data: dict) -> str:
@@ -138,20 +215,12 @@ async def _complete_deal(
         game.winner_team_id = winner_team_id
         game.finished_at = datetime.now(timezone.utc)
         game_state.current_deal = None
+        game_state.between_deals_until = None
     else:
-        players = (
-            await session.scalars(select(Player).where(Player.game_id == game.id))
-        ).all()
-        seated = sorted(players, key=lambda p: p.seat)
-        player_order = [p.id for p in seated]
-        player_team = {p.id: p.team_id for p in seated}
-        # rules.md section 5: the deal rotates clockwise, so deal N is opened
-        # by the player at seat (N-1) % 4 -- deal 1 by seat 0, deal 2 by seat 1...
-        first_player_id = player_order[game.current_deal_number % len(player_order)]
-        game_state.current_deal = start_new_deal(
-            player_order, player_team, game_state.scores, first_player_id=first_player_id
-        )
-        game.current_deal_number += 1
+        # Keep the completed deal in Redis during the visual table reset.
+        # Its deal_over flag rejects every gameplay action. The router creates
+        # and broadcasts the next deal only once this server deadline passes.
+        game_state.between_deals_until = time.time() + BETWEEN_DEALS_SECONDS
 
     await session.commit()
 
@@ -162,6 +231,7 @@ async def _complete_deal(
             "scores_breakdown": score_breakdown,
             "team_scores_after": team_scores_after,
             "next_deal": winner_team_id is None,
+            "transition_ends_at": game_state.between_deals_until,
         },
     }
     return deal_result_message, winner_team_id
@@ -184,12 +254,39 @@ async def apply_game_intent(
         game_state = store.get_state(game.id)
         if game_state is None or game_state.current_deal is None:
             raise IllegalActionError("no active deal")
+        if game_state.between_deals_until is not None:
+            raise IllegalActionError("next deal has not started yet")
 
-        apply_action(game_state.current_deal, sender_id, action)
+        deal = game_state.current_deal
+        before_hand = list(deal.hands[sender_id])
+        before_discard = list(deal.discard_pile)
+        before_melds = _meld_cards_by_id(deal)
+        before_opened = {
+            team_id: team.is_opened for team_id, team in deal.teams.items()
+        }
+        before_accumulator = {
+            team_id: team.turn_accumulator for team_id, team in deal.teams.items()
+        }
+        before_penalties = dict(deal.penalties)
+
+        apply_action(deal, sender_id, action)
 
         # one-shot notice: pop before persisting so it never reaches Redis
         notice = game_state.current_deal.pending_notice
         game_state.current_deal.pending_notice = None
+        action_event = _build_action_event(
+            intent=intent,
+            data=data,
+            sender_id=sender_id,
+            before_hand=before_hand,
+            before_discard=before_discard,
+            before_melds=before_melds,
+            before_opened=before_opened,
+            before_accumulator=before_accumulator,
+            before_penalties=before_penalties,
+            deal=deal,
+            notice=notice,
+        )
 
         if not game_state.current_deal.deal_over:
             store.set_state(game.id, game_state)
@@ -199,6 +296,7 @@ async def apply_game_intent(
                 deal_result_message=None,
                 winner_team_id=None,
                 notice=notice,
+                action_event=action_event,
             )
 
         deal_result_message, winner_team_id = await _complete_deal(
@@ -214,4 +312,5 @@ async def apply_game_intent(
             deal_completed=True,
             deal_result_message=deal_result_message,
             winner_team_id=winner_team_id,
+            action_event=action_event,
         )

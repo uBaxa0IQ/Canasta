@@ -36,6 +36,39 @@ export interface Card {
   suit: string | null
 }
 
+export type GameActionType =
+  | 'draw_deck'
+  | 'draw_discard'
+  | 'create_meld'
+  | 'add_to_meld'
+  | 'steal_wild'
+  | 'discard'
+  | 'concede_penalty'
+  | 'skip_turn_with_penalty'
+  | 'rollback'
+
+export interface GameActionData {
+  action: GameActionType
+  actor_id: string
+  team_id: string
+  phase_after: string
+  turn_player_after: string
+  meld_id: string | null
+  cards: Card[]
+  drawn_cards: Card[]
+  draw_count: number
+  discard_count_before: number
+  team_opened: boolean
+  threshold_before: number
+  threshold_after: number
+  penalty_delta: number
+  canasta_completed: boolean
+  deal_completed: boolean
+  exit_type: string | null
+  stolen_card_id?: string
+  replacement_card_id?: string
+}
+
 export interface Meld {
   id: string
   team_id: string
@@ -64,6 +97,8 @@ export interface GameStateData {
   pending_penalty: boolean
   team_opened: Record<string, boolean>
   turn_accumulator: Record<string, number>
+  penalties?: Record<string, number>
+  last_action?: GameActionData | null
 }
 
 export interface GameStateMessage {
@@ -88,6 +123,8 @@ export interface DealResultMessage {
     scores_breakdown: Record<string, DealScoreBreakdown>
     team_scores_after: Record<string, number>
     next_deal: boolean
+    transition_ends_at?: number | null
+    last_action?: GameActionData | null
   }
 }
 

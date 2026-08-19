@@ -71,6 +71,9 @@ def test_steal_wild_with_correct_replacement_succeeds(
         slot_ids = [c["id"] if c else None for c in b_melds[0]["slots"]]
         assert "b_w1" not in slot_ids
         assert "rep1" in slot_ids
+        assert state["data"]["last_action"]["action"] == "steal_wild"
+        assert state["data"]["last_action"]["meld_id"] == "opp-meld"
+        assert state["data"]["last_action"]["stolen_card_id"] == "b_w1"
 
         own_hand = state["data"]["hands"][turn_player_id]
         if pid == turn_player_id:

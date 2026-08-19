@@ -6,6 +6,7 @@ interface DealResult {
   scoresBreakdown: Record<string, DealScoreBreakdown>
   teamScoresAfter: Record<string, number>
   nextDeal: boolean
+  transitionEndsAt: number | null
 }
 
 interface GameStore {
@@ -56,6 +57,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         scoresBreakdown: data.scores_breakdown,
         teamScoresAfter: data.team_scores_after,
         nextDeal: data.next_deal,
+        transitionEndsAt: data.transition_ends_at ?? null,
       },
     }),
 

@@ -22,6 +22,7 @@ import random
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bots.strategy import BOT_STRATEGIES, DEFAULT_BOT_STRATEGY
+from app.config import settings
 from app.db.models import Game, Player
 from app.engine.engine import DealState, GameState
 from app.engine.serialization import game_state_to_dict
@@ -30,7 +31,12 @@ from app.redis_store import RedisGameStore
 
 # Cosmetic pause so a bot's turn doesn't feel instant -- randomized per move
 # instead of a fixed beat so a bot's whole turn doesn't read as a metronome.
-BOT_MOVE_DELAY_RANGE_SECONDS = (0.6, 2.0)
+# Production keeps the original short pause. Development can override this
+# through environment variables while the client has no between-deals pause.
+BOT_MOVE_DELAY_RANGE_SECONDS = (
+    settings.bot_move_delay_min_seconds,
+    settings.bot_move_delay_max_seconds,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -8,6 +8,8 @@ export type GameUiEventType =
   | 'meld'
   | 'canasta'
   | 'rollback'
+  | 'steal_wild'
+  | 'penalty'
   | 'turn'
 
 export interface GameUiEvent {
@@ -17,6 +19,11 @@ export interface GameUiEvent {
   teamId?: string
   cardIds?: string[]
   discardCardId?: string
+  meldId?: string
+  teamOpened?: boolean
+  thresholdBefore?: number
+  thresholdAfter?: number
+  penaltyDelta?: number
 }
 
 interface DiffOptions {
@@ -144,6 +151,7 @@ export function diffGameStates(
           actorId,
           teamId,
           cardIds: nextCards.slice(previousCards.length).map((card) => card.id),
+          meldId: meld.id,
           text:
             actorId === viewerId
               ? 'Вы собрали канасту'
@@ -155,6 +163,7 @@ export function diffGameStates(
           actorId,
           teamId,
           cardIds: nextCards.slice(previousCards.length).map((card) => card.id),
+          meldId: meld.id,
           text:
             previousMeld === undefined
               ? actorId === viewerId

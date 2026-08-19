@@ -18,7 +18,7 @@ from app.engine.models import Card, Rank, Suit, TeamTable
 from app.engine.scoring import ExitType
 from app.engine.turn_fsm import TurnPhase
 from app.engine.engine import DealState, apply_action
-from app.engine.turn_fsm import start_turn
+from app.engine.turn_fsm import draw_from_deck, start_turn
 from app.engine.rules import build_new_meld
 
 import pytest
@@ -219,6 +219,104 @@ def test_clean_exit_auto_triggers_when_meld_action_empties_hand() -> None:
     assert deal.exit_type == ExitType.CLEAN
     assert deal.exit_team_id == "A"
     assert deal.turn_state.phase == TurnPhase.DEAL_END
+
+
+def test_empty_hand_after_meld_passes_turn_without_completed_canasta() -> None:
+    player_order = ["p1", "p2", "p3", "p4"]
+    player_team = {"p1": "A", "p2": "B", "p3": "A", "p4": "B"}
+    fours = [
+        c(Rank.FOUR, Suit.CLUBS, "c4"),
+        c(Rank.FOUR, Suit.SPADES, "s4"),
+        c(Rank.FOUR, Suit.HEARTS, "h4"),
+    ]
+    drawn_four = c(Rank.FOUR, Suit.DIAMONDS, "d4")
+    deal = DealState(
+        deck=[drawn_four],
+        discard_pile=[],
+        teams={
+            "A": TeamTable(team_id="A", is_opened=True),
+            "B": TeamTable(team_id="B"),
+        },
+        hands={"p1": fours, "p2": [], "p3": [], "p4": []},
+        thresholds={"A": 30, "B": 30},
+        player_order=player_order,
+        player_team=player_team,
+        turn_state=start_turn("p1"),
+    )
+
+    apply_action(deal, "p1", DrawDeck())
+    apply_action(deal, "p1", CreateMeld(card_ids=["c4", "s4", "h4", "d4"]))
+
+    assert deal.hands["p1"] == []
+    assert not deal.deal_over
+    assert deal.exit_type is None
+    assert deal.discard_pile == []
+    assert deal.turn_state.current_player_id == "p2"
+    assert deal.turn_state.phase == TurnPhase.DRAW
+
+
+def test_adding_last_card_to_existing_meld_passes_turn() -> None:
+    player_order = ["p1", "p2", "p3", "p4"]
+    player_team = {"p1": "A", "p2": "B", "p3": "A", "p4": "B"}
+    existing_meld = build_new_meld(
+        "m1",
+        "A",
+        [
+            c(Rank.FOUR, Suit.CLUBS, "c4"),
+            c(Rank.FOUR, Suit.SPADES, "s4"),
+            c(Rank.FOUR, Suit.HEARTS, "h4"),
+        ],
+    )
+    last_card = c(Rank.FOUR, Suit.DIAMONDS, "d4")
+    deal = DealState(
+        deck=[],
+        discard_pile=[],
+        teams={
+            "A": TeamTable(team_id="A", melds=[existing_meld], is_opened=True),
+            "B": TeamTable(team_id="B"),
+        },
+        hands={"p1": [last_card], "p2": [], "p3": [], "p4": []},
+        thresholds={"A": 30, "B": 30},
+        player_order=player_order,
+        player_team=player_team,
+        turn_state=draw_from_deck(start_turn("p1")),
+    )
+
+    apply_action(deal, "p1", AddToMeld(meld_id="m1", card_ids=["d4"]))
+
+    assert deal.hands["p1"] == []
+    assert deal.teams["A"].melds[0].size == 4
+    assert not deal.deal_over
+    assert deal.turn_state.current_player_id == "p2"
+    assert deal.turn_state.phase == TurnPhase.DRAW
+
+
+def test_empty_hand_does_not_allow_below_threshold_opening() -> None:
+    player_order = ["p1", "p2", "p3", "p4"]
+    player_team = {"p1": "A", "p2": "B", "p3": "A", "p4": "B"}
+    fours = [
+        c(Rank.FOUR, Suit.CLUBS, "c4"),
+        c(Rank.FOUR, Suit.SPADES, "s4"),
+        c(Rank.FOUR, Suit.HEARTS, "h4"),
+    ]
+    deal = DealState(
+        deck=[],
+        discard_pile=[],
+        teams={"A": TeamTable(team_id="A"), "B": TeamTable(team_id="B")},
+        hands={"p1": fours, "p2": [], "p3": [], "p4": []},
+        thresholds={"A": 90, "B": 30},
+        player_order=player_order,
+        player_team=player_team,
+        turn_state=draw_from_deck(start_turn("p1")),
+    )
+
+    apply_action(deal, "p1", CreateMeld(card_ids=["c4", "s4", "h4"]))
+
+    assert {card.id for card in deal.hands["p1"]} == {"c4", "s4", "h4"}
+    assert deal.teams["A"].melds == []
+    assert deal.pending_notice == OPENING_THRESHOLD_NOTICE
+    assert deal.turn_state.current_player_id == "p1"
+    assert deal.turn_state.phase == TurnPhase.ACT
 
 
 def test_dirty_exit_allows_only_threes_left_in_hand() -> None:

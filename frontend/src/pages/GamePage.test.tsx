@@ -16,11 +16,13 @@ function dragCardTo(cardEl: Element, dropZoneSelector: string) {
   if (!zoneEl) throw new Error(`drop zone not found: ${dropZoneSelector}`)
   document.elementFromPoint = vi.fn().mockReturnValue(zoneEl)
 
-  cardEl.dispatchEvent(
-    new PointerEvent('pointerdown', { clientX: 0, clientY: 0, button: 0, bubbles: true }),
-  )
-  window.dispatchEvent(new PointerEvent('pointermove', { clientX: 40, clientY: 0 }))
-  window.dispatchEvent(new PointerEvent('pointerup'))
+  act(() => {
+    cardEl.dispatchEvent(
+      new PointerEvent('pointerdown', { clientX: 0, clientY: 0, button: 0, bubbles: true }),
+    )
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 40, clientY: 0 }))
+    window.dispatchEvent(new PointerEvent('pointerup'))
+  })
 }
 
 function baseGameState(overrides: Partial<GameStateData> = {}): GameStateData {
@@ -70,10 +72,42 @@ function baseGameState(overrides: Partial<GameStateData> = {}): GameStateData {
 function setupPlayers() {
   useLobbyStore.setState({
     players: [
-      { id: 'p1', name: 'Alice', seat: 0, team_id: 'A', connected: true, is_host: true, is_bot: false },
-      { id: 'p2', name: 'Bob', seat: 1, team_id: 'B', connected: true, is_host: false, is_bot: false },
-      { id: 'p3', name: 'Carol', seat: 2, team_id: 'A', connected: true, is_host: false, is_bot: false },
-      { id: 'p4', name: 'Dave', seat: 3, team_id: 'B', connected: true, is_host: false, is_bot: false },
+      {
+        id: 'p1',
+        name: 'Alice',
+        seat: 0,
+        team_id: 'A',
+        connected: true,
+        is_host: true,
+        is_bot: false,
+      },
+      {
+        id: 'p2',
+        name: 'Bob',
+        seat: 1,
+        team_id: 'B',
+        connected: true,
+        is_host: false,
+        is_bot: false,
+      },
+      {
+        id: 'p3',
+        name: 'Carol',
+        seat: 2,
+        team_id: 'A',
+        connected: true,
+        is_host: false,
+        is_bot: false,
+      },
+      {
+        id: 'p4',
+        name: 'Dave',
+        seat: 3,
+        team_id: 'B',
+        connected: true,
+        is_host: false,
+        is_bot: false,
+      },
     ],
     hostId: 'p1',
     settings: { targetScore: 5000, discardVisibility: 'TOP_ONLY' },
@@ -81,9 +115,7 @@ function setupPlayers() {
 }
 
 describe('GamePage', () => {
-  let send: ReturnType<
-    typeof vi.fn<(type: string, data?: Record<string, unknown>) => void>
-  >
+  let send: ReturnType<typeof vi.fn<(type: string, data?: Record<string, unknown>) => void>>
 
   beforeEach(() => {
     useGameStore.getState().reset()
@@ -106,14 +138,109 @@ describe('GamePage', () => {
     expect(screen.getByText(/Загрузка/)).toBeInTheDocument()
   })
 
-  it("renders own hand, opponent counts, and the deck/discard summary", () => {
+  it('renders own hand, opponent counts, and the deck/discard summary', () => {
     useGameStore.getState().applyGameState(baseGameState())
     render(<GamePage />)
 
     expect(screen.getByText('7♥')).toBeInTheDocument()
     expect(screen.getByText('7♣')).toBeInTheDocument()
     expect(screen.getByText('Bob')).toBeInTheDocument()
-    expect(screen.getByText(/Колода · 40/)).toBeInTheDocument()
+    expect(screen.getByText('Колода')).toBeInTheDocument()
+    expect(screen.getByText('40 карт')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('navigation', { name: /Варианты отображения/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows turn state on the table without a text banner', () => {
+    useGameStore.getState().applyGameState(
+      baseGameState({
+        turn_phase: 'DRAW',
+        discard_pile: [{ id: 'd1', rank: '9', suit: 'CLUBS' }],
+        discard_count: 1,
+      }),
+    )
+    const { container } = render(<GamePage />)
+
+    expect(screen.queryByText(/Ваш ход|Ходит /)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('hand-area')).toHaveClass('is-my-turn')
+    expect(screen.getByLabelText('hand-area')).not.toHaveClass('is-action-phase')
+    expect(container.querySelector('.pile:not(.discard-pile)')).toHaveClass('is-actionable')
+    expect(container.querySelector('.discard-pile')).toHaveClass('is-actionable')
+  })
+
+  it('pulses the hand panel after the player has drawn', () => {
+    useGameStore.getState().applyGameState(baseGameState({ turn_phase: 'ACT' }))
+    render(<GamePage />)
+
+    expect(screen.getByLabelText('hand-area')).toHaveClass('is-my-turn', 'is-action-phase')
+  })
+
+  it('keeps the current opponent highlight static after their draw', () => {
+    useGameStore
+      .getState()
+      .applyGameState(baseGameState({ turn_player_id: 'p2', turn_phase: 'ACT' }))
+    render(<GamePage />)
+
+    const playerTag = screen.getByText('Bob').closest('.seat-name-tag')
+    expect(playerTag).toHaveClass('is-turn')
+    expect(playerTag).not.toHaveClass('is-awaiting-draw')
+  })
+
+  it('places action errors inside the game playfield', () => {
+    useGameStore.getState().applyGameState(baseGameState())
+    useGameStore.getState().applyActionError('it is not your turn')
+    const { container } = render(<GamePage />)
+
+    const playfield = container.querySelector('.game-playfield')
+    expect(playfield).not.toBeNull()
+    expect(within(playfield as HTMLElement).getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('marks the partner and opponents with relation icons', () => {
+    useGameStore.getState().applyGameState(baseGameState())
+    render(<GamePage />)
+
+    expect(screen.getByRole('img', { name: 'Напарник' })).toBeInTheDocument()
+    expect(screen.getAllByRole('img', { name: 'Соперник' })).toHaveLength(2)
+  })
+
+  it('renders player, deck, and discard piles with one to three visible cards', () => {
+    useGameStore.getState().applyGameState(
+      baseGameState({
+        hands: {
+          p1: [{ id: 'c1', rank: '7', suit: 'HEARTS' }],
+          p2: 1,
+          p3: 2,
+          p4: 8,
+        },
+        deck_count: 2,
+        discard_pile: [{ id: 'd1', rank: '9', suit: 'CLUBS' }],
+        discard_count: 7,
+      }),
+    )
+    const { container } = render(<GamePage />)
+
+    expect(container.querySelector('[data-player-id="p2"]')).toHaveAttribute(
+      'data-stack-depth',
+      '1',
+    )
+    expect(container.querySelector('[data-player-id="p3"]')).toHaveAttribute(
+      'data-stack-depth',
+      '2',
+    )
+    expect(container.querySelector('[data-player-id="p4"]')).toHaveAttribute(
+      'data-stack-depth',
+      '3',
+    )
+    expect(container.querySelector('[data-card-stack="deck"]')).toHaveAttribute(
+      'data-stack-depth',
+      '2',
+    )
+    expect(container.querySelector('[data-card-stack="discard"]')).toHaveAttribute(
+      'data-stack-depth',
+      '3',
+    )
   })
 
   it('sends draw_deck when drawing during the DRAW phase on my turn', async () => {
@@ -126,11 +253,12 @@ describe('GamePage', () => {
 
   it('creates a meld from selected hand cards and clears the selection', async () => {
     useGameStore.getState().applyGameState(baseGameState())
-    render(<GamePage />)
+    const { container } = render(<GamePage />)
 
     await userEvent.click(screen.getByText('7♥'))
     await userEvent.click(screen.getByText('7♣'))
     await userEvent.click(screen.getByText('7♠'))
+    expect(container.querySelector('.game-command-dock')).toHaveClass('is-expanded')
     await userEvent.click(screen.getByRole('button', { name: /Новая комбинация/ }))
 
     expect(send).toHaveBeenCalledWith('create_meld', {
@@ -138,6 +266,7 @@ describe('GamePage', () => {
       wild_side: 'low',
     })
     expect(screen.getByRole('button', { name: '7♥' })).toHaveAttribute('aria-pressed', 'false')
+    expect(container.querySelector('.game-command-dock')).not.toHaveClass('is-expanded')
   })
 
   it('shows exact wild placement choices when creating an ambiguous sequence', async () => {
@@ -180,19 +309,15 @@ describe('GamePage', () => {
     expect(screen.queryByText('Сбросить')).not.toBeInTheDocument()
   })
 
-  it('steals a wild card from an opponent meld using a selected hand card', async () => {
+  it('makes opponent wild cards drop targets without a replacement click action', async () => {
     useGameStore.getState().applyGameState(baseGameState())
     render(<GamePage />)
 
-    await userEvent.click(screen.getByRole('button', { name: 'JOKER' }))
-    await userEvent.click(screen.getByText('7♥'))
-    await userEvent.click(screen.getByText('Заменить козырь'))
+    await userEvent.click(within(screen.getByLabelText('meld-m1')).getByRole('button'))
 
-    expect(send).toHaveBeenCalledWith('steal_wild', {
-      meld_id: 'm1',
-      wild_card_id: 'w1',
-      replacement_card_id: 'c1',
-    })
+    expect(screen.queryByRole('button', { name: 'JOKER' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('JOKER')).toHaveAttribute('data-drop-zone', 'wild:m1:w1')
+    expect(screen.queryByText('Заменить козырь')).not.toBeInTheDocument()
   })
 
   it('discards a dragged hand card dropped on the discard pile', () => {
@@ -212,10 +337,10 @@ describe('GamePage', () => {
               id: 'm2',
               team_id: 'A',
               kind: 'SET',
-              rank_or_suit_anchor: '4',
+              rank_or_suit_anchor: '7',
               slots: [
-                { id: 'c9', rank: '4', suit: 'HEARTS' },
-                { id: 'c10', rank: '4', suit: 'SPADES' },
+                { id: 'c9', rank: '7', suit: 'DIAMONDS' },
+                { id: 'c10', rank: '7', suit: 'SPADES' },
               ],
             },
           ],
@@ -264,9 +389,7 @@ describe('GamePage', () => {
     useGameStore.getState().applyGameState(baseGameState())
     render(<GamePage />)
 
-    act(() => {
-      dragCardTo(screen.getByRole('button', { name: '7♣' }), '[data-drop-zone="handslot:c1"]')
-    })
+    dragCardTo(screen.getByRole('button', { name: '7♣' }), '[data-drop-zone="handslot:c1"]')
 
     expect(send).not.toHaveBeenCalled()
     const hand = screen.getByLabelText('hand')
@@ -277,12 +400,21 @@ describe('GamePage', () => {
   })
 
   it("shows the threshold indicator while the viewer's team is not opened", () => {
-    useGameStore
-      .getState()
-      .applyGameState(baseGameState({ turn_accumulator: { A: 15, B: 0 } }))
+    useGameStore.getState().applyGameState(baseGameState({ turn_accumulator: { A: 15, B: 0 } }))
     render(<GamePage />)
 
-    expect(screen.getByLabelText('threshold-A')).toHaveTextContent('15/50')
+    const handArea = screen.getByLabelText('hand-area')
+    const threshold = within(handArea).getByLabelText('threshold-A')
+    expect(threshold).toHaveTextContent('Выход: 15 из 50 очков')
+  })
+
+  it('shows card prices in hover tooltips', () => {
+    useGameStore.getState().applyGameState(baseGameState())
+    render(<GamePage />)
+
+    const card = screen.getByRole('button', { name: '7♥' })
+    expect(within(card).getByText('5 очков')).toBeInTheDocument()
+    expect(card).not.toHaveAttribute('title')
   })
 
   it("hides the threshold indicator once the viewer's team is opened", () => {
@@ -327,17 +459,17 @@ describe('GamePage', () => {
     expect(send).toHaveBeenCalledWith('discard', { card_id: 'c1' })
   })
 
-  it('shows the winner once the game is over and hides interactive controls', () => {
+  it('shows the winner once the game is over and hides interactive controls', async () => {
     useGameStore.getState().applyGameState(baseGameState({ scores: { A: 5200, B: 1100 } }))
     useGameStore.getState().applyGameOver('A')
     render(<GamePage />)
 
-    expect(screen.getByText(/Игра окончена/)).toBeInTheDocument()
+    expect(await screen.findByText(/Игра окончена/)).toBeInTheDocument()
     expect(screen.getByText(/Победила команда A/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Новая комбинация/ })).not.toBeInTheDocument()
   })
 
-  it('prefers the final deal result scores over the possibly stale game_state scores', () => {
+  it('prefers the final deal result scores over the possibly stale game_state scores', async () => {
     useGameStore.getState().applyGameState(baseGameState({ scores: { A: 4200, B: 1100 } }))
     useGameStore.getState().applyDealResult({
       deal_number: 5,
@@ -357,7 +489,7 @@ describe('GamePage', () => {
     useGameStore.getState().applyGameOver('A')
     render(<GamePage />)
 
-    const finalScores = screen.getByLabelText('final-scores')
+    const finalScores = await screen.findByLabelText('final-scores')
     expect(finalScores).toHaveTextContent('Команда A: 5200')
   })
 
@@ -380,9 +512,11 @@ describe('GamePage', () => {
     })
     render(<GamePage />)
 
-    expect(screen.getByText('Сдача №1 завершена')).toBeInTheDocument()
+    expect(await screen.findByText('Сдача №1 завершена')).toBeInTheDocument()
+    expect(screen.getByTestId('deal-transition-layer')).toBeInTheDocument()
     await userEvent.click(screen.getByText('Продолжить'))
     expect(screen.queryByText('Сдача №1 завершена')).not.toBeInTheDocument()
+    expect(screen.getByTestId('deal-transition-layer')).toBeInTheDocument()
   })
 
   it('logs notable events and sends chat messages', async () => {

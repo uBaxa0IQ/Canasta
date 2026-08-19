@@ -9,12 +9,11 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault()
+  async function createAndOpenGame(hostName: string) {
     setError(null)
     setSubmitting(true)
     try {
-      const game = await createGame(name)
+      const game = await createGame(hostName)
       saveSession(game.game_id, {
         playerId: game.player_id,
         sessionToken: game.host_session_token,
@@ -24,6 +23,11 @@ export function HomePage() {
       setError(err instanceof Error ? err.message : 'не удалось создать игру')
       setSubmitting(false)
     }
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    await createAndOpenGame(name)
   }
 
   return (

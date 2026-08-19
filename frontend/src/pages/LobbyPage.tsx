@@ -50,15 +50,19 @@ export function LobbyPage() {
           </button>
         </div>
 
-        <h2>Места за столом</h2>
+        <h2>Команды</h2>
         <SeatGrid
           players={players}
+          viewerId={playerId}
           hostId={hostId}
           isHost={isHost}
           onAssignSeat={(assignedPlayerId, seat) =>
             send('assign_seat', { player_id: assignedPlayerId, seat })
           }
           onAddBot={(seat) => send('add_bot', { seat })}
+          onRemovePlayer={(removedPlayerId) =>
+            send('remove_player', { player_id: removedPlayerId })
+          }
         />
 
         <h2>Настройки</h2>

@@ -54,6 +54,48 @@ def test_create_meld_with_valid_set_is_accepted(
             assert own_hand == 1
 
 
+def test_melding_the_last_card_passes_turn_without_a_canasta(
+    started_game: dict, redis_store: RedisGameStore
+) -> None:
+    game_id = started_game["game_id"]
+    host_id = started_game["host_id"]
+    sockets = started_game["sockets"]
+    turn_player_id = started_game["states"][host_id]["data"]["turn_player_id"]
+
+    sockets[turn_player_id].send_json({"type": "draw_deck", "data": {}})
+    for ws in sockets.values():
+        ws.receive_json()
+
+    game_state = redis_store.get_state(game_id)
+    assert game_state is not None
+    assert game_state.current_deal is not None
+    next_player_id = game_state.current_deal.next_player(turn_player_id)
+    _force_hand(
+        redis_store,
+        game_id,
+        turn_player_id,
+        [
+            Card(id="a1", rank=Rank.ACE, suit=Suit.CLUBS),
+            Card(id="a2", rank=Rank.ACE, suit=Suit.SPADES),
+            Card(id="a3", rank=Rank.ACE, suit=Suit.HEARTS),
+        ],
+    )
+
+    sockets[turn_player_id].send_json(
+        {"type": "create_meld", "data": {"card_ids": ["a1", "a2", "a3"]}}
+    )
+    states = {pid: ws.receive_json() for pid, ws in sockets.items()}
+
+    for pid, state in states.items():
+        assert state["type"] == "game_state"
+        assert state["data"]["turn_player_id"] == next_player_id
+        assert state["data"]["turn_phase"] == "DRAW"
+        assert state["data"]["hands"][turn_player_id] == (
+            [] if pid == turn_player_id else 0
+        )
+        assert state["data"]["last_action"]["deal_completed"] is False
+
+
 def test_create_meld_with_too_many_wilds_is_rejected_and_state_unchanged(
     started_game: dict, redis_store: RedisGameStore
 ) -> None:

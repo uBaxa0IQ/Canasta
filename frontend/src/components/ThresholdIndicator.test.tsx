@@ -5,7 +5,7 @@ import { ThresholdIndicator } from './ThresholdIndicator'
 describe('ThresholdIndicator', () => {
   it('shows progress while the team is not yet opened', () => {
     render(<ThresholdIndicator teamId="A" accumulated={15} threshold={30} />)
-    expect(screen.getByText(/15\/30/)).toBeInTheDocument()
+    expect(screen.getByText('Выход: 15 из 30 очков')).toBeInTheDocument()
   })
 
   it('hides once accumulated points reach the threshold', () => {
@@ -16,5 +16,10 @@ describe('ThresholdIndicator', () => {
   it('stays hidden past the threshold too', () => {
     render(<ThresholdIndicator teamId="A" accumulated={45} threshold={30} />)
     expect(screen.queryByLabelText('threshold-A')).not.toBeInTheDocument()
+  })
+
+  it('shows a full preview while selected cards reach the threshold', () => {
+    render(<ThresholdIndicator teamId="A" accumulated={35} threshold={30} previewing />)
+    expect(screen.getByText('Выход: 35 из 30 очков')).toBeInTheDocument()
   })
 })

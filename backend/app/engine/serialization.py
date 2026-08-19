@@ -180,6 +180,7 @@ def game_state_to_dict(game_state: GameState) -> dict:
             }
             for d in game_state.deal_history
         ],
+        "between_deals_until": game_state.between_deals_until,
     }
 
 
@@ -193,4 +194,5 @@ def game_state_from_dict(data: dict) -> GameState:
         if data["current_deal"]
         else None,
         deal_history=[DealSummary(**d) for d in data["deal_history"]],
+        between_deals_until=data.get("between_deals_until"),
     )

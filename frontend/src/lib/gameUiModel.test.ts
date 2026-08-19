@@ -30,7 +30,6 @@ describe('buildGameUiModel', () => {
       gameOver: false,
       viewerTeamId: 'A',
       selectedCardCount: 1,
-      hasStealTarget: false,
     })
     expect(ui.canDiscard).toBe(true)
   })
@@ -46,7 +45,6 @@ describe('buildGameUiModel', () => {
       gameOver: false,
       viewerTeamId: 'A',
       selectedCardCount: 0,
-      hasStealTarget: false,
     })
     expect(ui.canDiscard).toBe(true)
   })
@@ -61,7 +59,6 @@ describe('buildGameUiModel', () => {
       gameOver: false,
       viewerTeamId: 'A',
       selectedCardCount: 0,
-      hasStealTarget: false,
     })
     expect(ui.canTakeDiscard).toBe(false)
     expect(ui.discardBlockedReason).toMatch(/тройка/)

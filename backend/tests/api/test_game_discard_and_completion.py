@@ -115,7 +115,11 @@ async def test_full_deal_flow_scores_and_advances_to_next_deal(
     started_game: dict,
     redis_store: RedisGameStore,
     db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch,
 ) -> None:
+    from app.ws import game_intents
+
+    monkeypatch.setattr(game_intents, "BETWEEN_DEALS_SECONDS", 0.2)
     game_id = started_game["game_id"]
     host_id = started_game["host_id"]
     sockets = started_game["sockets"]
@@ -172,10 +176,25 @@ async def test_full_deal_flow_scores_and_advances_to_next_deal(
         assert state["type"] == "deal_result"
         assert state["data"]["deal_number"] == 1
         assert state["data"]["next_deal"] is True
+        assert state["data"]["transition_ends_at"] is not None
         assert "A" in state["data"]["scores_breakdown"]
         assert "B" in state["data"]["scores_breakdown"]
 
-    # a fresh deal was dealt and broadcast to everyone right after
+    # The completed deal remains authoritative throughout the transition.
+    transitioning = _load(redis_store, game_id)
+    assert transitioning.current_deal is not None
+    assert transitioning.current_deal.deal_over is True
+    assert transitioning.between_deals_until is not None
+
+    # Even the next player cannot act early; bots use the same intent path.
+    sockets[turn_player_id].send_json({"type": "draw_deck", "data": {}})
+    blocked = sockets[turn_player_id].receive_json()
+    assert blocked == {
+        "type": "action_error",
+        "data": {"reason": "next deal has not started yet"},
+    }
+
+    # A fresh deal is created and broadcast only after the server deadline.
     next_states = {pid: ws.receive_json() for pid, ws in sockets.items()}
     for pid, state in next_states.items():
         assert state["type"] == "game_state"

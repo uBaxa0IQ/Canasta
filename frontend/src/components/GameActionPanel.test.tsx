@@ -5,13 +5,11 @@ import { GameActionPanel } from './GameActionPanel'
 
 const baseProps = {
   canCreateMeld: false,
-  canStealWild: false,
   selectedCount: 0,
   createWildPlacement: null,
   createWildSide: 'low' as const,
   onCreateWildSideChange: vi.fn(),
   onCreateMeld: vi.fn(),
-  onStealWild: vi.fn(),
 }
 
 describe('GameActionPanel', () => {

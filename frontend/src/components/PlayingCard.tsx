@@ -1,5 +1,5 @@
 import type { PointerEventHandler } from 'react'
-import { isRedSuit, isWildRank, suitSymbol } from '../lib/cards'
+import { cardPointsLabel, isRedSuit, isWildRank, suitSymbol } from '../lib/cards'
 import type { Card } from '../lib/protocol'
 
 interface PlayingCardProps {
@@ -17,6 +17,7 @@ interface PlayingCardProps {
   onPointerDown?: PointerEventHandler
   dropZone?: string
   dragging?: boolean
+  showPoints?: boolean
 }
 
 // Casino-style card face rendered purely with CSS/text: rank+suit corner
@@ -38,6 +39,7 @@ export function PlayingCard({
   onPointerDown,
   dropZone,
   dragging = false,
+  showPoints = true,
 }: PlayingCardProps) {
   const isWild = wild || (card !== undefined && isWildRank(card.rank))
   const classes = [
@@ -77,6 +79,12 @@ export function PlayingCard({
   ) : null
 
   const dataLabel = !faceDown && !empty && card ? label : undefined
+  const pointsLabel = showPoints && !faceDown && !empty && card ? cardPointsLabel(card) : undefined
+  const pointsTooltip = pointsLabel ? (
+    <span className="card-points-tooltip" aria-hidden>
+      {pointsLabel}
+    </span>
+  ) : null
 
   if (onClick) {
     return (
@@ -90,8 +98,9 @@ export function PlayingCard({
         aria-label={ariaLabel}
         data-drop-zone={dropZone}
       >
-        <span className={classes} data-label={dataLabel}>
+        <span className={classes} data-label={dataLabel} data-card-id={card?.id}>
           {content}
+          {pointsTooltip}
         </span>
       </button>
     )
@@ -101,11 +110,13 @@ export function PlayingCard({
     <span
       className={classes}
       data-label={dataLabel}
+      data-card-id={card?.id}
       aria-label={ariaLabel}
       onPointerDown={onPointerDown}
       data-drop-zone={dropZone}
     >
       {content}
+      {pointsTooltip}
     </span>
   )
 }

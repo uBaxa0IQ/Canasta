@@ -35,6 +35,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://canasta:canasta@postgres:5432/canasta
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000"]'
+      BOT_MOVE_DELAY_MIN_SECONDS: 2.5
+      BOT_MOVE_DELAY_MAX_SECONDS: 4.0
     ports:
       - "8000:8000"
     volumes:
@@ -50,6 +52,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
     ports:
       - "3000:5173"
     volumes:

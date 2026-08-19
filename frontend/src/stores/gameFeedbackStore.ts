@@ -12,7 +12,7 @@ interface GameFeedbackStore {
   recentTeamId: string | null
   recentDiscardCardId: string | null
   publish: (event: GameUiEvent | null, newCardIds: string[]) => void
-  clearNewCardIds: () => void
+  acknowledgeNewCard: (cardId: string) => void
   clearLatestEvent: (id: string) => void
   reset: () => void
 }
@@ -27,15 +27,16 @@ export const useGameFeedbackStore = create<GameFeedbackStore>((set) => ({
   recentDiscardCardId: null,
 
   publish: (event, newCardIds) =>
-    set({
+    set((state) => ({
       latestEvent: event ? { ...event, id: `f${nextFeedbackId++}` } : null,
-      newCardIds,
+      newCardIds: [...new Set([...state.newCardIds, ...newCardIds])],
       recentActorId: event?.actorId ?? null,
       recentTeamId: event?.teamId ?? null,
       recentDiscardCardId: event?.discardCardId ?? null,
-    }),
+    })),
 
-  clearNewCardIds: () => set({ newCardIds: [] }),
+  acknowledgeNewCard: (cardId) =>
+    set((state) => ({ newCardIds: state.newCardIds.filter((id) => id !== cardId) })),
   clearLatestEvent: (id) =>
     set((state) => (state.latestEvent?.id === id ? { latestEvent: null } : {})),
   reset: () =>

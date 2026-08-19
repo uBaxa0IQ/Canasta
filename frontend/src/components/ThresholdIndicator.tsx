@@ -2,6 +2,8 @@ interface ThresholdIndicatorProps {
   teamId: string
   accumulated: number
   threshold: number
+  completing?: boolean
+  previewing?: boolean
 }
 
 // FR: progress toward the opening threshold, hidden once the team is
@@ -13,14 +15,19 @@ export function ThresholdIndicator({
   teamId,
   accumulated,
   threshold,
+  completing = false,
+  previewing = false,
 }: ThresholdIndicatorProps) {
-  if (accumulated >= threshold) return null
+  if (accumulated >= threshold && !completing && !previewing) return null
   const pct = Math.min(100, Math.round((accumulated / threshold) * 100))
 
   return (
-    <div aria-label={`threshold-${teamId}`} className="threshold-indicator">
+    <div
+      aria-label={`threshold-${teamId}`}
+      className={`threshold-indicator${completing ? ' is-completing' : ''}`}
+    >
       <p className="threshold-label">
-        Порог открытия: {accumulated}/{threshold}
+        Выход: {accumulated} из {threshold} очков
       </p>
       <div className="threshold-bar-track">
         <div className="threshold-bar-fill" style={{ width: `${pct}%` }} />

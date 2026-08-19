@@ -12,7 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.redis_store import RedisGameStore
-from app.ws import router
+from app.ws import game_intents, router
 
 
 def create_game(client: TestClient, **overrides: object) -> dict:
@@ -44,6 +44,8 @@ def started_game(
     monkeypatch.setattr(
         router, "_pick_first_player", lambda player_order: player_order[0]
     )
+    # Keep integration tests fast while preserving the real delayed transition.
+    monkeypatch.setattr(game_intents, "BETWEEN_DEALS_SECONDS", 0.05)
 
     game = create_game(client)
     game_id = game["game_id"]

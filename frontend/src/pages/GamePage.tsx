@@ -1,7 +1,11 @@
-import { motion } from 'framer-motion'
-import { useEffect, useMemo, useState } from 'react'
+import { Swords } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
+import { MdOutlineHandshake } from 'react-icons/md'
 import { ChatPanel } from '../components/ChatPanel'
+import { ActionPlaybackLayer } from '../components/ActionPlaybackLayer'
 import { DealResultModal } from '../components/DealResultModal'
+import { DealTransitionLayer } from '../components/DealTransitionLayer'
 import { DragLayer } from '../components/DragLayer'
 import { ErrorToast } from '../components/ErrorToast'
 import { EventLog } from '../components/EventLog'
@@ -12,21 +16,23 @@ import { Hand } from '../components/Hand'
 import { PlayingCard } from '../components/PlayingCard'
 import { TeamZone } from '../components/TeamZone'
 import { ThresholdIndicator } from '../components/ThresholdIndicator'
-import { TurnBanner } from '../components/TurnBanner'
 import type { WildSide } from '../components/WildSideChooser'
 import { WildSideChooser } from '../components/WildSideChooser'
 import {
+  canAddCardToMeld,
+  cardPoints,
   compareForHand,
   isWildRank,
   parseSequenceAnchor,
   SEQUENCE_RANKS,
 } from '../lib/cards'
 import { makeCardDragSource } from '../lib/cardDrag'
-import { CARD_ENTER_TO, CARD_FLIGHT_TRANSITION, cardLayoutId } from '../lib/cardMotion'
+import { captureCardOrigins } from '../lib/actionOrigins'
 import { isOpeningThresholdRollback } from '../lib/errors'
 import { buildGameUiModel } from '../lib/gameUiModel'
 import type { Card, LobbyPlayer, Meld } from '../lib/protocol'
 import { createWildPlacementOptions } from '../lib/wildPlacement'
+import { useTurnSound } from '../lib/useTurnSound'
 import { useChatStore } from '../stores/chatStore'
 import { useConnectionStore } from '../stores/connectionStore'
 import type { DragOrigin } from '../stores/dragStore'
@@ -34,49 +40,109 @@ import { useDragStore } from '../stores/dragStore'
 import { useEventLogStore } from '../stores/eventLogStore'
 import { useGameFeedbackStore } from '../stores/gameFeedbackStore'
 import { useGameStore } from '../stores/gameStore'
-import { orderedHand, reorderHand, syncHandOrder, useHandOrderStore } from '../stores/handOrderStore'
+import {
+  orderedHand,
+  reorderHand,
+  syncHandOrder,
+  useHandOrderStore,
+} from '../stores/handOrderStore'
 import { useLobbyStore } from '../stores/lobbyStore'
-
-interface StealTarget {
-  meldId: string
-  wildCardId: string
-}
 
 interface PendingWildAdd {
   meldId: string
   cardIds: string[]
 }
 
+interface ActiveDealTransition {
+  dealNumber: number
+  durationMs: number
+}
+
 const TURN_TIMEOUT_SECONDS = 90
+
+function visiblePileDepth(count: number): number {
+  return Math.min(3, Math.max(0, count))
+}
+
+function pileLayerStyle(layer: number, depth: number): CSSProperties {
+  return { '--stack-layer': layer, '--stack-depth': depth } as CSSProperties
+}
+
+function cardCountLabel(count: number): string {
+  const mod100 = count % 100
+  const mod10 = count % 10
+  if (mod10 === 1 && mod100 !== 11) return `${count} карта`
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} карты`
+  }
+  return `${count} карт`
+}
+
+function SeatRelationIcon({ relation }: { relation: 'partner' | 'opponent' }) {
+  if (relation === 'partner') {
+    return (
+      <MdOutlineHandshake
+        className="seat-relation-icon is-partner"
+        role="img"
+        aria-label="Напарник"
+      />
+    )
+  }
+
+  return (
+    <Swords
+      className="seat-relation-icon is-opponent"
+      strokeWidth="1.8"
+      role="img"
+      aria-label="Соперник"
+    />
+  )
+}
 
 function seatTag(
   player: LobbyPlayer | undefined,
   count: number | undefined,
   isTurn: boolean,
-  isRecentActor: boolean,
+  isAwaitingDraw: boolean,
+  relation: 'partner' | 'opponent',
 ) {
   if (!player) return null
   const classes = [
     'seat-name-tag',
     isTurn ? 'is-turn' : '',
-    isRecentActor ? 'is-recent-actor' : '',
+    isAwaitingDraw ? 'is-awaiting-draw' : '',
     !player.connected ? 'is-offline' : '',
   ]
     .filter(Boolean)
     .join(' ')
   const name = player.is_bot ? player.name : player.name
-  const visibleBacks = Math.max(1, Math.min(5, Math.ceil((count ?? 0) / 4)))
+  const visibleBacks = visiblePileDepth(count ?? 0)
   return (
-    <div className="seat-player">
+    <div className="seat-player" data-seat-player-id={player.id}>
       <span className={classes}>
         <span className="seat-name">{name}</span>
-        <span className="seat-card-count">{count ?? 0} карт</span>
+        <SeatRelationIcon relation={relation} />
       </span>
-      <span className="opponent-hand-fan" aria-hidden>
-        {Array.from({ length: visibleBacks }, (_, index) => (
-          <PlayingCard key={index} faceDown size="small" />
-        ))}
-      </span>
+      {visibleBacks > 0 && (
+        <span
+          className="card-pile-stack opponent-hand-stack"
+          data-card-stack="player"
+          data-player-id={player.id}
+          data-stack-depth={visibleBacks}
+          aria-hidden
+        >
+          {Array.from({ length: visibleBacks }, (_, index) => (
+            <span
+              key={index}
+              className="card-pile-layer"
+              style={pileLayerStyle(index, visibleBacks)}
+            >
+              <PlayingCard faceDown />
+            </span>
+          ))}
+        </span>
+      )}
+      <span className="pile-card-count">{cardCountLabel(count ?? 0)}</span>
     </div>
   )
 }
@@ -95,7 +161,7 @@ export function GamePage() {
   const send = useConnectionStore((s) => s.send)
   const playerId = useConnectionStore((s) => s.playerId)
   const connectionStatus = useConnectionStore((s) => s.status)
-  const gameState = useGameStore((s) => s.state)
+  const liveGameState = useGameStore((s) => s.state)
   const lastDealResult = useGameStore((s) => s.lastDealResult)
   const winnerTeamId = useGameStore((s) => s.winnerTeamId)
   const lastActionError = useGameStore((s) => s.lastActionError)
@@ -111,17 +177,19 @@ export function GamePage() {
   const logEntries = useEventLogStore((s) => s.entries)
   const latestFeedbackEvent = useGameFeedbackStore((s) => s.latestEvent)
   const newCardIds = useGameFeedbackStore((s) => s.newCardIds)
-  const recentActorId = useGameFeedbackStore((s) => s.recentActorId)
   const recentTeamId = useGameFeedbackStore((s) => s.recentTeamId)
   const recentDiscardCardId = useGameFeedbackStore((s) => s.recentDiscardCardId)
-  const clearNewCardIds = useGameFeedbackStore((s) => s.clearNewCardIds)
+  const acknowledgeNewCard = useGameFeedbackStore((s) => s.acknowledgeNewCard)
   const clearLatestFeedbackEvent = useGameFeedbackStore((s) => s.clearLatestEvent)
 
   const [selectedCardIds, setSelectedCardIds] = useState<string[]>([])
-  const [stealTarget, setStealTarget] = useState<StealTarget | null>(null)
   const [pendingWildAdd, setPendingWildAdd] = useState<PendingWildAdd | null>(null)
   const [createWildSide, setCreateWildSide] = useState<WildSide>('low')
   const [offlineCountdown, setOfflineCountdown] = useState<number | null>(null)
+  const [isDealing, setIsDealing] = useState(true)
+  const [dealResultVisible, setDealResultVisible] = useState(false)
+  const [gameOverVisible, setGameOverVisible] = useState(false)
+  const [dealTransition, setDealTransition] = useState<ActiveDealTransition | null>(null)
   const isDiscardDropTarget = useDragStore(
     (s) => s.hoveredZone === 'discard' && s.origin === 'hand',
   )
@@ -131,40 +199,103 @@ export function GamePage() {
   const autoSort = useHandOrderStore((s) => s.autoSort)
   const toggleAutoSort = useHandOrderStore((s) => s.toggleAutoSort)
 
+  useEffect(() => {
+    if (!isDealing) return
+    const id = window.setTimeout(() => setIsDealing(false), 1350)
+    return () => window.clearTimeout(id)
+  }, [isDealing])
+
+  useEffect(() => {
+    if (lastDealResult === null) return
+    const transitionId = window.setTimeout(() => {
+      if (!lastDealResult.nextDeal) return
+      const durationMs = lastDealResult.transitionEndsAt
+        ? Math.max(0, lastDealResult.transitionEndsAt * 1000 - Date.now())
+        : 10_000
+      setDealTransition({ dealNumber: lastDealResult.dealNumber, durationMs })
+    }, 0)
+    const modalId = window.setTimeout(() => setDealResultVisible(true), 720)
+    return () => {
+      window.clearTimeout(transitionId)
+      window.clearTimeout(modalId)
+    }
+  }, [lastDealResult])
+
+  const finishDealTransition = useCallback(() => {
+    setDealTransition(null)
+    setIsDealing(true)
+  }, [])
+
+  useEffect(() => {
+    if (winnerTeamId === null) return
+    const id = window.setTimeout(() => setGameOverVisible(true), 720)
+    return () => window.clearTimeout(id)
+  }, [winnerTeamId])
+
+  const gameState = liveGameState
+
+  useLayoutEffect(() => {
+    if (!isDealing || liveGameState === null) return
+    const deck = document.querySelector<HTMLElement>(
+      '.deck-pile-btn .card-pile-layer:last-child .playing-card',
+    )
+    if (!deck) return
+    const source = deck.getBoundingClientRect()
+    const targets = document.querySelectorAll<HTMLElement>('.hand-tray > li, .opponent-hand-stack')
+    targets.forEach((target, index) => {
+      const inlineAnimation = target.style.animation
+      const inlineTransform = target.style.transform
+      target.style.animation = 'none'
+      target.style.transform = 'none'
+      const visualTarget = target.querySelector<HTMLElement>('.playing-card') ?? target
+      const destination = visualTarget.getBoundingClientRect()
+      target.style.setProperty(
+        '--deal-from-x',
+        `${source.left + source.width / 2 - (destination.left + destination.width / 2)}px`,
+      )
+      target.style.setProperty(
+        '--deal-from-y',
+        `${source.top + source.height / 2 - (destination.top + destination.height / 2)}px`,
+      )
+      target.style.setProperty('--deal-index', `${index}`)
+      if (inlineAnimation) target.style.animation = inlineAnimation
+      else target.style.removeProperty('animation')
+      if (inlineTransform) target.style.transform = inlineTransform
+      else target.style.removeProperty('transform')
+    })
+  }, [isDealing, liveGameState])
+
+  useTurnSound(gameState?.turn_player_id, gameState?.turn_phase, playerId)
+
   const turnPlayerId = gameState?.turn_player_id ?? null
   const turnPlayer = players.find((p) => p.id === turnPlayerId)
   const turnPlayerOffline = turnPlayer !== undefined && !turnPlayer.connected
-  const hasConnectionBanner = connectionStatus !== 'open'
 
   useEffect(() => {
-    if (!turnPlayerOffline || timedOutPlayerId === turnPlayerId) {
-      setOfflineCountdown(null)
-      return
-    }
-    setOfflineCountdown(TURN_TIMEOUT_SECONDS)
+    const shouldCountDown = turnPlayerOffline && timedOutPlayerId !== turnPlayerId
+    const resetId = window.setTimeout(
+      () => setOfflineCountdown(shouldCountDown ? TURN_TIMEOUT_SECONDS : null),
+      0,
+    )
+    if (!shouldCountDown) return () => window.clearTimeout(resetId)
+
     const id = setInterval(() => {
       setOfflineCountdown((c) => (c === null ? null : Math.max(0, c - 1)))
     }, 1000)
-    return () => clearInterval(id)
+    return () => {
+      window.clearTimeout(resetId)
+      clearInterval(id)
+    }
   }, [turnPlayerId, turnPlayerOffline, timedOutPlayerId])
 
   useEffect(() => {
-    if (newCardIds.length === 0) return
-    const id = window.setTimeout(clearNewCardIds, 2600)
-    return () => window.clearTimeout(id)
-  }, [clearNewCardIds, newCardIds])
-
-  useEffect(() => {
     if (!latestFeedbackEvent) return
-    const id = window.setTimeout(
-      () => clearLatestFeedbackEvent(latestFeedbackEvent.id),
-      3600,
-    )
+    const id = window.setTimeout(() => clearLatestFeedbackEvent(latestFeedbackEvent.id), 3600)
     return () => window.clearTimeout(id)
   }, [clearLatestFeedbackEvent, latestFeedbackEvent])
 
   const myHandRaw = gameState && playerId ? gameState.hands[playerId] : undefined
-  const myHand: Card[] = Array.isArray(myHandRaw) ? myHandRaw : []
+  const myHand: Card[] = useMemo(() => (Array.isArray(myHandRaw) ? myHandRaw : []), [myHandRaw])
 
   const syncedHandOrder = useMemo(
     () => syncHandOrder(myHand, handOrder, compareForHand, autoSort),
@@ -181,6 +312,7 @@ export function GamePage() {
     () => orderedHand(myHand, syncedHandOrder),
     [myHand, syncedHandOrder],
   )
+  const displayedMelds = gameState?.melds ?? {}
 
   const connectionBanner =
     connectionStatus === 'open' ? null : (
@@ -214,9 +346,7 @@ export function GamePage() {
     if (!Array.isArray(hand)) handCounts[pid] = hand
   }
 
-  const bySeat = new Map(
-    players.filter((p) => p.seat !== null).map((p) => [p.seat as number, p]),
-  )
+  const bySeat = new Map(players.filter((p) => p.seat !== null).map((p) => [p.seat as number, p]))
   const mySeat = me?.seat ?? null
   const partner = mySeat !== null ? bySeat.get((mySeat + 2) % 4) : undefined
   const leftPlayer = mySeat !== null ? bySeat.get((mySeat + 1) % 4) : undefined
@@ -226,8 +356,7 @@ export function GamePage() {
   const isMyTurn = !gameOver && playerId !== null && playerId === gameState.turn_player_id
   const phase = gameState.turn_phase
   const isRollbackError = isOpeningThresholdRollback(lastActionError)
-  const viewerTeamOpened =
-    viewerTeamId !== null && (gameState.team_opened[viewerTeamId] ?? false)
+  const viewerTeamOpened = viewerTeamId !== null && (gameState.team_opened[viewerTeamId] ?? false)
 
   const ui = buildGameUiModel({
     gameState,
@@ -235,20 +364,22 @@ export function GamePage() {
     gameOver,
     viewerTeamId,
     selectedCardCount: selectedCardIds.length,
-    hasStealTarget: stealTarget !== null,
   })
 
   const topDiscardCard = gameState.discard_pile[gameState.discard_pile.length - 1]
+  const deckPileDepth = visiblePileDepth(gameState.deck_count)
+  const discardPileDepth = visiblePileDepth(
+    Math.max(gameState.discard_count, topDiscardCard === undefined ? 0 : 1),
+  )
   const draggableCards = [...myHand, ...gameState.discard_pile]
   const ownMelds = viewerTeamId !== null ? (gameState.melds[viewerTeamId] ?? []) : []
   const pendingWildMeld =
-    pendingWildAdd !== null
-      ? (ownMelds.find((m) => m.id === pendingWildAdd.meldId) ?? null)
-      : null
+    pendingWildAdd !== null ? (ownMelds.find((m) => m.id === pendingWildAdd.meldId) ?? null) : null
 
   const selectedCards = selectedCardIds
     .map((id) => cardsById.get(id))
     .filter((c): c is Card => c !== undefined)
+  const selectedMeldPoints = selectedCards.reduce((total, card) => total + cardPoints(card), 0)
   const createWildPlacement = createWildPlacementOptions(selectedCards)
   const createNeedsWildSide = createWildPlacement !== null
 
@@ -289,7 +420,11 @@ export function GamePage() {
         if (!ui.canDiscard) return
         send('discard', { card_id: cardId })
       } else if (zone.startsWith('meld:')) {
-        requestAddToMeld(zone.slice('meld:'.length), [cardId])
+        const meldId = zone.slice('meld:'.length)
+        const meld = ownMelds.find((candidate) => candidate.id === meldId)
+        const card = cardsById.get(cardId)
+        if (!meld || !card || !canAddCardToMeld(meld, card)) return
+        requestAddToMeld(meldId, [cardId])
       } else if (zone.startsWith('wild:')) {
         const [, meldId, wildCardId] = zone.split(':')
         send('steal_wild', {
@@ -309,15 +444,8 @@ export function GamePage() {
     )
   }
 
-  function selectStealTarget(meldId: string, wildCardId: string) {
-    setStealTarget((current) =>
-      current?.meldId === meldId && current.wildCardId === wildCardId
-        ? null
-        : { meldId, wildCardId },
-    )
-  }
-
   function handleCreateMeld() {
+    captureCardOrigins(selectedCardIds)
     send('create_meld', {
       card_ids: selectedCardIds,
       wild_side: createNeedsWildSide ? createWildSide : 'low',
@@ -325,22 +453,11 @@ export function GamePage() {
     setSelectedCardIds([])
   }
 
-  function handleStealWild() {
-    if (!stealTarget) return
-    send('steal_wild', {
-      meld_id: stealTarget.meldId,
-      wild_card_id: stealTarget.wildCardId,
-      replacement_card_id: selectedCardIds[0],
-    })
-    setSelectedCardIds([])
-    setStealTarget(null)
-  }
-
   return (
-    <main className="table-frame">
+    <main className="table-frame free-table-layout">
       {connectionBanner}
 
-      {gameOver && winnerTeamId !== null && (
+      {gameOver && gameOverVisible && winnerTeamId !== null && (
         <GameOverModal
           winnerTeamId={winnerTeamId}
           finalScores={lastDealResult?.teamScoresAfter ?? gameState.scores}
@@ -348,20 +465,12 @@ export function GamePage() {
       )}
 
       <div className="game-chrome">
-        <GameHeader scores={gameState.scores} targetScore={targetScore} />
-        <TurnBanner
-          turnPlayerId={gameState.turn_player_id}
-          viewerId={playerId}
-          turnPhase={phase}
-          playerNames={playerNames}
+        <GameHeader
+          scores={gameState.scores}
+          thresholds={gameState.thresholds}
+          targetScore={targetScore}
+          viewerTeamId={viewerTeamId}
         />
-        {viewerTeamId !== null && !viewerTeamOpened && (
-          <ThresholdIndicator
-            teamId={viewerTeamId}
-            accumulated={gameState.turn_accumulator[viewerTeamId]}
-            threshold={gameState.thresholds[viewerTeamId]}
-          />
-        )}
         {!gameOver && turnPlayerOffline && (
           <p className="status-line offline-countdown" role="status">
             {turnPlayer?.name} офлайн.{' '}
@@ -385,19 +494,25 @@ export function GamePage() {
         )}
       </div>
 
-      <ErrorToast
-        reason={isRollbackError ? null : lastActionError}
-        onDismiss={dismissActionError}
-        offsetForBanner={hasConnectionBanner}
-      />
+      {dealTransition !== null && (
+        <DealTransitionLayer
+          key={dealTransition.dealNumber}
+          durationMs={dealTransition.durationMs}
+          onComplete={finishDealTransition}
+        />
+      )}
 
-      {lastDealResult && (
+      {lastDealResult && dealResultVisible && !gameOver && (
         <DealResultModal
           dealNumber={lastDealResult.dealNumber}
           scoresBreakdown={lastDealResult.scoresBreakdown}
           teamScoresAfter={lastDealResult.teamScoresAfter}
+          viewerTeamId={viewerTeamId}
           nextDeal={lastDealResult.nextDeal}
-          onDismiss={dismissDealResult}
+          onDismiss={() => {
+            setDealResultVisible(false)
+            dismissDealResult()
+          }}
         />
       )}
 
@@ -418,17 +533,27 @@ export function GamePage() {
 
       <div className="game-body">
         <div className="game-playfield">
-          <div className="table-felt" aria-label="table">
+          <ErrorToast
+            reason={isRollbackError ? null : lastActionError}
+            onDismiss={dismissActionError}
+          />
+          <div
+            className={`table-felt${isDealing ? ' is-dealing' : ''}${
+              dealTransition !== null ? ' is-between-deals' : ''
+            }`}
+            aria-label="table"
+          >
             <div className="seat-slot seat-slot-top">
               {seatTag(
                 partner,
                 handCounts[partner?.id ?? ''],
                 gameState.turn_player_id === partner?.id,
-                recentActorId === partner?.id,
+                phase === 'DRAW' && gameState.turn_player_id === partner?.id,
+                'partner',
               )}
             </div>
 
-            {Object.entries(gameState.melds)
+            {Object.entries(displayedMelds)
               .filter(([teamId]) => teamId !== viewerTeamId)
               .map(([teamId, melds]) => (
                 <TeamZone
@@ -438,10 +563,9 @@ export function GamePage() {
                   isOwnTeam={false}
                   canDragAdd={false}
                   canStealFrom={isMyTurn && phase === 'ACT'}
-                  stealTarget={stealTarget}
-                  highlightedTeamId={recentTeamId}
+                  highlightedTeamId={latestFeedbackEvent?.meldId ? null : recentTeamId}
                   highlightedCardIds={latestFeedbackEvent?.cardIds ?? []}
-                  onSelectStealTarget={selectStealTarget}
+                  highlightedMeldId={latestFeedbackEvent?.meldId}
                 />
               ))}
 
@@ -450,17 +574,18 @@ export function GamePage() {
                 leftPlayer,
                 handCounts[leftPlayer?.id ?? ''],
                 gameState.turn_player_id === leftPlayer?.id,
-                recentActorId === leftPlayer?.id,
+                phase === 'DRAW' && gameState.turn_player_id === leftPlayer?.id,
+                'opponent',
               )}
             </div>
 
             <div className="seat-slot-center">
               <div
-                className={`pile${isMyTurn && phase === 'DRAW' ? ' is-actionable' : ''}${
+                className={`pile${ui.canDrawDeck ? ' is-actionable' : ''}${
                   latestFeedbackEvent?.type === 'draw_deck' ? ' is-recent-action' : ''
                 }`}
               >
-                <span className="pile-label">Колода · {gameState.deck_count}</span>
+                <span className="pile-label">Колода</span>
                 {gameState.deck_count > 0 ? (
                   <button
                     type="button"
@@ -469,26 +594,35 @@ export function GamePage() {
                     disabled={!ui.canDrawDeck}
                     onClick={() => send('draw_deck', {})}
                   >
-                    <span className="deck-stack">
-                      <PlayingCard faceDown />
-                      {gameState.deck_count > 1 && <PlayingCard faceDown />}
-                      {gameState.deck_count > 2 && <PlayingCard faceDown />}
+                    <span
+                      className="card-pile-stack"
+                      data-card-stack="deck"
+                      data-stack-depth={deckPileDepth}
+                    >
+                      {Array.from({ length: deckPileDepth }, (_, index) => (
+                        <span
+                          key={index}
+                          className="card-pile-layer"
+                          style={pileLayerStyle(index, deckPileDepth)}
+                        >
+                          <PlayingCard faceDown />
+                        </span>
+                      ))}
                     </span>
                   </button>
                 ) : (
                   <div className="discard-empty" />
                 )}
+                <span className="pile-card-count">{cardCountLabel(gameState.deck_count)}</span>
               </div>
 
               <div
                 className={`pile discard-pile${isDiscardDropTarget ? ' is-drop-target' : ''}${
                   ui.canTakeDiscard ? ' is-actionable' : ''
-                }${
-                  recentDiscardCardId === topDiscardCard?.id ? ' is-recent-action' : ''
-                }`}
+                }${recentDiscardCardId === topDiscardCard?.id ? ' is-recent-action' : ''}`}
                 data-drop-zone="discard"
               >
-                <span className="pile-label">Сброс · {gameState.discard_count}</span>
+                <span className="pile-label">Сброс</span>
                 {topDiscardCard !== undefined ? (
                   <button
                     type="button"
@@ -497,31 +631,42 @@ export function GamePage() {
                     aria-label="Взять сброс"
                     onClick={() => send('draw_discard', {})}
                   >
-                    <motion.span
-                      key={topDiscardCard.id}
-                      layout
-                      layoutId={cardLayoutId(topDiscardCard.id)}
-                      initial={{ opacity: 0, y: -24, scale: 0.75 }}
-                      animate={CARD_ENTER_TO}
-                      transition={CARD_FLIGHT_TRANSITION}
-                      style={{ display: 'inline-block' }}
+                    <span
+                      className="card-pile-stack discard-stack"
+                      data-card-stack="discard"
+                      data-stack-depth={discardPileDepth}
                     >
-                      <PlayingCard
-                        card={topDiscardCard}
-                        onPointerDown={
-                          makeCardDragSource(
-                            topDiscardCard.id,
-                            'discard',
-                            ui.dragDrawEnabled,
-                            handleCardDrop,
-                          ).onPointerDown
-                        }
-                      />
-                    </motion.span>
+                      {Array.from({ length: discardPileDepth - 1 }, (_, index) => (
+                        <span
+                          key={index}
+                          className="card-pile-layer discard-stack-layer"
+                          style={pileLayerStyle(index, discardPileDepth)}
+                          aria-hidden
+                        />
+                      ))}
+                      <span
+                        key={topDiscardCard.id}
+                        className="card-pile-layer"
+                        style={pileLayerStyle(discardPileDepth - 1, discardPileDepth)}
+                      >
+                        <PlayingCard
+                          card={topDiscardCard}
+                          onPointerDown={
+                            makeCardDragSource(
+                              topDiscardCard.id,
+                              'discard',
+                              ui.dragDrawEnabled,
+                              handleCardDrop,
+                            ).onPointerDown
+                          }
+                        />
+                      </span>
+                    </span>
                   </button>
                 ) : (
                   <div className="discard-empty" />
                 )}
+                <span className="pile-card-count">{cardCountLabel(gameState.discard_count)}</span>
               </div>
             </div>
 
@@ -530,11 +675,12 @@ export function GamePage() {
                 rightPlayer,
                 handCounts[rightPlayer?.id ?? ''],
                 gameState.turn_player_id === rightPlayer?.id,
-                recentActorId === rightPlayer?.id,
+                phase === 'DRAW' && gameState.turn_player_id === rightPlayer?.id,
+                'opponent',
               )}
             </div>
 
-            {Object.entries(gameState.melds)
+            {Object.entries(displayedMelds)
               .filter(([teamId]) => teamId === viewerTeamId)
               .map(([teamId, melds]) => (
                 <TeamZone
@@ -543,11 +689,11 @@ export function GamePage() {
                   melds={melds}
                   isOwnTeam
                   canDragAdd={ui.dragActEnabled}
+                  handCards={myHand}
                   canStealFrom={false}
-                  stealTarget={stealTarget}
-                  highlightedTeamId={recentTeamId}
+                  highlightedTeamId={latestFeedbackEvent?.meldId ? null : recentTeamId}
                   highlightedCardIds={latestFeedbackEvent?.cardIds ?? []}
-                  onSelectStealTarget={selectStealTarget}
+                  highlightedMeldId={latestFeedbackEvent?.meldId}
                 />
               ))}
           </div>
@@ -565,27 +711,51 @@ export function GamePage() {
         </aside>
       </div>
 
-      <div className="game-command-dock">
+      <div
+        className={`game-command-dock${ui.canCreateMeld ? ' is-expanded' : ''}${
+          dealTransition !== null ? ' is-between-deals' : ''
+        }`}
+      >
         <GameActionPanel
           visible={isMyTurn && !gameOver}
           phase={phase}
           canCreateMeld={ui.canCreateMeld}
-          canStealWild={stealTarget !== null}
           selectedCount={selectedCardIds.length}
           createWildPlacement={createWildPlacement}
           createWildSide={createWildSide}
           onCreateWildSideChange={setCreateWildSide}
           onCreateMeld={handleCreateMeld}
-          onStealWild={handleStealWild}
         />
 
         <Hand
           cards={myHandOrdered}
           selectedIds={selectedCardIds}
           newCardIds={newCardIds}
+          onAcknowledgeNewCard={acknowledgeNewCard}
           isMyTurn={isMyTurn}
-          isRecentActor={recentActorId === playerId}
+          isActionPhase={isMyTurn && phase === 'ACT'}
           isRollbackNotice={latestFeedbackEvent?.type === 'rollback' || isRollbackError}
+          isDealing={isDealing}
+          progress={
+            viewerTeamId !== null &&
+            (!viewerTeamOpened ||
+              (latestFeedbackEvent?.teamOpened && latestFeedbackEvent.teamId === viewerTeamId)) ? (
+              <ThresholdIndicator
+                teamId={viewerTeamId}
+                accumulated={
+                  gameState.turn_accumulator[viewerTeamId] +
+                  (phase === 'ACT' ? selectedMeldPoints : 0)
+                }
+                threshold={gameState.thresholds[viewerTeamId]}
+                completing={
+                  viewerTeamOpened &&
+                  latestFeedbackEvent?.teamOpened === true &&
+                  latestFeedbackEvent.teamId === viewerTeamId
+                }
+                previewing={selectedCardIds.length > 0}
+              />
+            ) : null
+          }
           autoSort={autoSort}
           onToggleAutoSort={toggleAutoSort}
           onToggleCard={toggleCard}
@@ -594,6 +764,7 @@ export function GamePage() {
       </div>
 
       <DragLayer cards={draggableCards} />
+      <ActionPlaybackLayer viewerId={playerId} viewerTeamId={viewerTeamId} />
     </main>
   )
 }

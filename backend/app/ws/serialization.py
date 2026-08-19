@@ -29,7 +29,21 @@ def _meld_public(meld: Meld) -> dict:
     }
 
 
-def build_client_game_state(game_state: GameState, viewer_id: str) -> dict:
+def _action_event_public(action_event: dict | None, viewer_id: str) -> dict | None:
+    if action_event is None:
+        return None
+    public = dict(action_event)
+    if action_event.get("actor_id") != viewer_id and action_event.get("action") in {
+        "draw_deck",
+        "draw_discard",
+    }:
+        public["drawn_cards"] = []
+    return public
+
+
+def build_client_game_state(
+    game_state: GameState, viewer_id: str, action_event: dict | None = None
+) -> dict:
     deal = game_state.current_deal
     if deal is None:
         raise ValueError("no active deal")
@@ -73,6 +87,8 @@ def build_client_game_state(game_state: GameState, viewer_id: str) -> dict:
             "turn_accumulator": {
                 team_id: team.turn_accumulator for team_id, team in deal.teams.items()
             },
+            "penalties": dict(deal.penalties),
+            "last_action": _action_event_public(action_event, viewer_id),
         },
     }
 

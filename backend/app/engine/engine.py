@@ -34,7 +34,6 @@ from app.engine.turn_fsm import (
     go_out_clean,
     record_meld_created,
     start_turn,
-    can_discard,
     discard_incurring_penalty,
 )
 
@@ -107,6 +106,9 @@ class GameState:
     scores: dict[str, int]
     current_deal: DealState | None = None
     deal_history: list[DealSummary] = field(default_factory=list)
+    # Unix timestamp until which a completed deal remains on the table.
+    # While set, no new deal exists and all gameplay intents are rejected.
+    between_deals_until: float | None = None
 
 
 def start_new_deal(
@@ -209,9 +211,9 @@ def _rollback_created_melds(
 def _maybe_auto_clean_exit(deal: DealState, player_id: str) -> None:
     """After a meld action empties the hand with a closed canasta, go out (FR-19)."""
     team_table = deal.team_of(player_id)
-    if not _has_no_playable_cards(deal.hands[player_id]) or not _team_has_closed_canasta(
-        team_table
-    ):
+    if not _has_no_playable_cards(
+        deal.hands[player_id]
+    ) or not _team_has_closed_canasta(team_table):
         return
     deal.turn_state = go_out_clean(
         deal.turn_state, hand_empty=True, team_has_closed_canasta=True
@@ -219,6 +221,38 @@ def _maybe_auto_clean_exit(deal: DealState, player_id: str) -> None:
     deal.deal_over = True
     deal.exit_team_id = deal.player_team[player_id]
     deal.exit_type = ExitType.CLEAN
+
+
+def _maybe_advance_empty_hand_after_meld(deal: DealState, player_id: str) -> None:
+    """A meld can consume the last card without ending the deal.
+
+    A completed canasta still produces the regular clean exit. Without one,
+    an actually empty hand simply ends this turn and the player will draw as
+    normal when their next turn comes around.
+    """
+    _maybe_auto_clean_exit(deal, player_id)
+    if deal.deal_over or deal.hands[player_id]:
+        return
+
+    team_id = deal.player_team[player_id]
+    team_table = deal.teams[team_id]
+    threshold = deal.thresholds[team_id]
+    if not team_table.is_opened:
+        # Emptying the hand does not make a below-threshold opening legal.
+        _rollback_created_melds(deal, player_id, team_table)
+        deal.pending_notice = OPENING_THRESHOLD_NOTICE
+        return
+
+    if discard_incurring_penalty(
+        deal.turn_state,
+        team_opened=team_table.is_opened,
+        threshold_met=team_table.turn_accumulator >= threshold,
+    ):
+        deal.penalties[team_id] = (
+            deal.penalties.get(team_id, 0) - CONCEDE_PENALTY_POINTS
+        )
+
+    deal.turn_state = start_turn(deal.next_player(player_id))
 
 
 def apply_action(deal: DealState, player_id: str, action: Action) -> DealState:
@@ -260,7 +294,7 @@ def apply_action(deal: DealState, player_id: str, action: Action) -> DealState:
                 team_table.turn_accumulator += _opening_value(meld)
                 _maybe_open_team(team_table, deal.thresholds[team_id])
             deal.turn_state = record_meld_created(deal.turn_state, meld.id)
-            _maybe_auto_clean_exit(deal, player_id)
+            _maybe_advance_empty_hand_after_meld(deal, player_id)
 
         case AddToMeld(meld_id=meld_id, card_ids=card_ids, wild_side=wild_side):
             hand = deal.hands[player_id]
@@ -286,7 +320,7 @@ def apply_action(deal: DealState, player_id: str, action: Action) -> DealState:
                 added_value = _opening_value(new_meld) - _opening_value(old_meld)
                 team_table.turn_accumulator += added_value
                 _maybe_open_team(team_table, deal.thresholds[team_id])
-            _maybe_auto_clean_exit(deal, player_id)
+            _maybe_advance_empty_hand_after_meld(deal, player_id)
 
         case StealWild(
             meld_id=meld_id,

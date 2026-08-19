@@ -19,6 +19,7 @@ describe('DealResultModal', () => {
         dealNumber={2}
         scoresBreakdown={{ A: breakdown }}
         teamScoresAfter={{ A: 995, B: 100 }}
+        viewerTeamId="A"
         nextDeal
         onDismiss={vi.fn()}
       />,
@@ -26,9 +27,28 @@ describe('DealResultModal', () => {
 
     expect(screen.getByText('Сдача №2 завершена')).toBeInTheDocument()
     const teamA = screen.getByLabelText('breakdown-A')
+    expect(teamA).toHaveTextContent('Ваша команда')
     expect(teamA).toHaveTextContent('Бонус за канасты: 500')
     expect(teamA).toHaveTextContent('Итого за сдачу: 995')
     expect(teamA).toHaveTextContent('Счёт партии: 995')
+  })
+
+  it('labels and orders teams relative to the viewer', () => {
+    render(
+      <DealResultModal
+        dealNumber={2}
+        scoresBreakdown={{ A: breakdown, B: { ...breakdown, total: 100 } }}
+        teamScoresAfter={{ A: 995, B: 100 }}
+        viewerTeamId="B"
+        nextDeal
+        onDismiss={vi.fn()}
+      />,
+    )
+
+    const sections = screen.getAllByRole('region')
+    expect(sections[0]).toHaveAccessibleName('breakdown-B')
+    expect(sections[0]).toHaveTextContent('Ваша команда')
+    expect(sections[1]).toHaveTextContent('Команда соперников')
   })
 
   it('labels the dismiss button "Продолжить" when another deal follows', () => {
@@ -37,6 +57,7 @@ describe('DealResultModal', () => {
         dealNumber={1}
         scoresBreakdown={{ A: breakdown }}
         teamScoresAfter={{ A: 995 }}
+        viewerTeamId="A"
         nextDeal
         onDismiss={vi.fn()}
       />,
@@ -50,6 +71,7 @@ describe('DealResultModal', () => {
         dealNumber={1}
         scoresBreakdown={{ A: breakdown }}
         teamScoresAfter={{ A: 995 }}
+        viewerTeamId="A"
         nextDeal={false}
         onDismiss={vi.fn()}
       />,
@@ -64,6 +86,7 @@ describe('DealResultModal', () => {
         dealNumber={1}
         scoresBreakdown={{ A: breakdown }}
         teamScoresAfter={{ A: 995 }}
+        viewerTeamId="A"
         nextDeal
         onDismiss={onDismiss}
       />,

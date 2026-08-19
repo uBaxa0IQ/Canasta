@@ -13,8 +13,12 @@ def test_draw_deck_grows_own_hand_but_masks_for_others(started_game: dict) -> No
         if pid == turn_player_id:
             assert isinstance(own_hand, list)
             assert len(own_hand) == 14
+            assert len(state["data"]["last_action"]["drawn_cards"]) == 1
         else:
             assert own_hand == 14
+            assert state["data"]["last_action"]["drawn_cards"] == []
+        assert state["data"]["last_action"]["action"] == "draw_deck"
+        assert state["data"]["last_action"]["actor_id"] == turn_player_id
         assert state["data"]["deck_count"] == 108 - 13 * 4 - 1
 
 

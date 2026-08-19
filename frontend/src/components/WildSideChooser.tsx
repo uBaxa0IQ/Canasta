@@ -29,7 +29,7 @@ export function WildSideChooser({ meld, onChoose, onCancel }: WildSideChooserPro
         animate={{ opacity: 1, scale: 1 }}
         transition={{ type: 'spring', stiffness: 420, damping: 30 }}
       >
-        <h3>Козырь</h3>
+        <h3>Куда поставить козырь?</h3>
         <div className="wild-sequence-preview" aria-label="Текущий ряд">
           {visibleCards.map((label, index) => (
             <span key={`${label}-${index}`} className="wild-sequence-card">

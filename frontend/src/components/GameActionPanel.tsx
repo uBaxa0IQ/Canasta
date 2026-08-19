@@ -9,33 +9,29 @@ interface GameActionPanelProps {
   visible: boolean
   phase: string
   canCreateMeld: boolean
-  canStealWild: boolean
   selectedCount: number
   createWildPlacement: CreateWildPlacement | null
   createWildSide: WildSide
   onCreateWildSideChange: (side: WildSide) => void
   onCreateMeld: () => void
-  onStealWild: () => void
 }
 
 export function GameActionPanel({
   visible,
   phase,
   canCreateMeld,
-  canStealWild,
   selectedCount,
   createWildPlacement,
   createWildSide,
   onCreateWildSideChange,
   onCreateMeld,
-  onStealWild,
 }: GameActionPanelProps) {
   if (!visible) {
     return <section className="game-action-panel is-idle" aria-label="actions" aria-hidden />
   }
 
   const hasWildChoice = phase === 'ACT' && createWildPlacement !== null
-  const hasActButtons = phase === 'ACT' && (canCreateMeld || canStealWild)
+  const hasActButtons = phase === 'ACT' && canCreateMeld
   const showPanel = visible && (hasWildChoice || hasActButtons)
 
   return (
@@ -75,16 +71,6 @@ export function GameActionPanel({
           >
             Новая комбинация{selectedCount > 0 ? ` (${selectedCount})` : ''}
           </button>
-          {canStealWild && (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={selectedCount !== 1}
-              onClick={onStealWild}
-            >
-              Заменить козырь
-            </button>
-          )}
         </div>
       )}
     </section>

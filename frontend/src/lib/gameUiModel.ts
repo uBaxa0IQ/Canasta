@@ -11,7 +11,6 @@ export interface GameUiModel {
   dragActEnabled: boolean
   dragDrawEnabled: boolean
   canAddToMelds: boolean
-  canStealWild: boolean
   pickupSatisfied: boolean
   viewerTeamOpened: boolean
   viewerThresholdMet: boolean
@@ -23,7 +22,6 @@ interface BuildGameUiModelInput {
   gameOver: boolean
   viewerTeamId: string | null
   selectedCardCount: number
-  hasStealTarget: boolean
 }
 
 export function buildGameUiModel({
@@ -32,17 +30,14 @@ export function buildGameUiModel({
   gameOver,
   viewerTeamId,
   selectedCardCount,
-  hasStealTarget,
 }: BuildGameUiModelInput): GameUiModel {
   const phase = gameState.turn_phase
-  const viewerTeamOpened =
-    viewerTeamId !== null && (gameState.team_opened[viewerTeamId] ?? false)
+  const viewerTeamOpened = viewerTeamId !== null && (gameState.team_opened[viewerTeamId] ?? false)
   const viewerThresholdMet =
     viewerTeamId !== null &&
     gameState.turn_accumulator[viewerTeamId] >= gameState.thresholds[viewerTeamId]
 
-  const pickupSatisfied =
-    !gameState.must_meld_after_pickup || gameState.melds_created_this_turn > 0
+  const pickupSatisfied = !gameState.must_meld_after_pickup || gameState.melds_created_this_turn > 0
 
   const topDiscard = gameState.discard_pile[gameState.discard_pile.length - 1]
   const discardBlockedReason =
@@ -53,15 +48,13 @@ export function buildGameUiModel({
         : null
 
   const canDrawDeck = isMyTurn && !gameOver && phase === 'DRAW' && gameState.deck_count > 0
-  const canTakeDiscard =
-    isMyTurn && !gameOver && phase === 'DRAW' && discardBlockedReason === null
+  const canTakeDiscard = isMyTurn && !gameOver && phase === 'DRAW' && discardBlockedReason === null
 
   const dragActEnabled = isMyTurn && !gameOver && phase === 'ACT'
   const dragDrawEnabled = canTakeDiscard
   const canDiscard = dragActEnabled
   const canCreateMeld = dragActEnabled && selectedCardCount >= 3
   const canAddToMelds = dragActEnabled && selectedCardCount > 0
-  const canStealWild = dragActEnabled && hasStealTarget
 
   return {
     isMyTurn,
@@ -74,7 +67,6 @@ export function buildGameUiModel({
     dragActEnabled,
     dragDrawEnabled,
     canAddToMelds,
-    canStealWild,
     pickupSatisfied,
     viewerTeamOpened,
     viewerThresholdMet,
